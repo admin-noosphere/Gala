@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import aiohttp
 from dataclasses import dataclass
+from pipecat.processors.frame_processor import FrameProcessor, FrameDirection
 
 
 @dataclass
@@ -35,22 +36,23 @@ class NeuroSyncClient:
             params = {"sr": sample_rate, "ch": channels}
             try:
                 await session.post(self.url, params=params, data=audio)
-            except Exception as exc:  # pragma: no cover - simple log
-                # En production on utiliserait loguru/logging
+            except Exception as exc:
                 print(f"NeuroSyncClient error: {exc}")
 
 
-class NeuroSyncProcessor:
+class NeuroSyncProcessor(FrameProcessor):
     """Processor pipeline qui transmet chaque segment audio à NeuroSync."""
 
-    def __init__(self, client: NeuroSyncClient) -> None:
+    def __init__(self, client: NeuroSyncClient):
+        # nom lisible dans les logs
+        super().__init__(name="neurosync_processor")
         self.client = client
-        self.name = "neurosync_processor"
 
-    async def process_frame(self, frame, direction):  # type: ignore[no-untyped-def]
+    async def process_frame(self, frame, direction=FrameDirection.DOWNSTREAM):
         audio = getattr(frame, "audio", None)
-        if audio is not None and hasattr(audio, "audio"):
+        if audio and hasattr(audio, "audio"):
             await self.client.send_audio(
                 audio.audio, audio.sample_rate, getattr(audio, "channels", 1)
             )
-        return [frame]
+        # propage le frame inchangé
+        await self.push_frame(frame, direction)

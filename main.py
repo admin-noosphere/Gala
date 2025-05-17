@@ -112,13 +112,18 @@ class UtteranceRecorder(FrameProcessor):
         self._counter = itertools.count(1)
         self._debug_counter = 0
         logger.info(f"UtteranceRecorder initialisé - dossier: {self.log_dir}")
-
+        
         # Sauvegarde de tous les types de frames pour déboguer
         self._save_all_frames = False
 
     async def process_frame(self, frame, direction=FrameDirection.DOWNSTREAM):
-        # Journalisation de tous les frames pour débogage
-        logger.info(f"Frame reçu: {type(frame).__name__}")
+        # --- (0) Toujours appeler super() en premier ---
+        await super().process_frame(frame, direction)
+        
+        # --- (1) Traitement et enregistrement ---
+        # Ne logge que les frames importants, pas les frames audio bruts
+        if not isinstance(frame, TTSAudioRawFrame):
+            logger.info(f"Frame reçu: {type(frame).__name__}")
 
         # Capture TTSStartedFrame
         if isinstance(frame, TTSStartedFrame):
@@ -131,27 +136,13 @@ class UtteranceRecorder(FrameProcessor):
             audio_data = frame.audio
             if isinstance(audio_data, bytes) and len(audio_data) > 0:
                 self._debug_counter += 1
-                logger.info(
-                    f"📊 Audio détecté dans {type(frame).__name__}: {len(audio_data)} octets"
-                )
-
-                # Toujours sauvegarder les chunks individuels en mode debug
-                if self._save_all_frames:
-                    debug_path = (
-                        self.log_dir / f"debug_chunk_{self._debug_counter:04d}.wav"
-                    )
-                    with wave.open(str(debug_path), "wb") as wf:
-                        wf.setnchannels(1)
-                        wf.setsampwidth(2)
-                        wf.setframerate(24000)
-                        wf.writeframes(audio_data)
-
-                # Ajouter au buffer principal si on enregistre
+                
+                # Ajouter au buffer principal si on enregistre (sans logger chaque chunk)
                 if self._recording:
                     self._buffer.extend(audio_data)
-                    logger.info(
-                        f"📥 Audio ajouté au buffer: {len(self._buffer)} octets total"
-                    )
+                    # Log uniquement tous les 30 chunks pour réduire le bruit
+                    if self._debug_counter % 30 == 0:
+                        logger.info(f"📥 Buffer audio: {len(self._buffer)} octets accumulés")
 
         # Capture TTSStoppedFrame
         elif isinstance(frame, TTSStoppedFrame):
@@ -167,34 +158,14 @@ class UtteranceRecorder(FrameProcessor):
                     wf.setframerate(24000)
                     wf.writeframes(self._buffer)
 
-                logger.info(
-                    f"✅ Utterance complète enregistrée: {wav_path} ({len(self._buffer)} octets)"
-                )
+                logger.info(f"✅ Utterance complète enregistrée: {wav_path} ({len(self._buffer)} octets)")
             else:
-                logger.warning(
-                    "⚠️ Fin d'enregistrement mais buffer vide ou pas d'enregistrement en cours"
-                )
+                logger.warning("⚠️ Fin d'enregistrement mais buffer vide ou pas d'enregistrement en cours")
 
             self._recording = False
-
-        # Capture automatique des chunks audio bruts même sans événements start/stop
-        elif self._debug_counter % 100 == 0:  # Toutes les 100 frames environ
-            if len(self._buffer) > 0:
-                backup_path = (
-                    self.log_dir
-                    / f"backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.wav"
-                )
-                with wave.open(str(backup_path), "wb") as wf:
-                    wf.setnchannels(1)
-                    wf.setsampwidth(2)
-                    wf.setframerate(24000)
-                    wf.writeframes(self._buffer)
-                logger.info(
-                    f"🔄 Sauvegarde de sécurité: {backup_path} ({len(self._buffer)} octets)"
-                )
-
-        # IMPORTANT: relayer le frame
-        return await super().process_frame(frame, direction)
+            
+        # --- (2) Toujours propager la frame à la fin ---
+        await self.push_frame(frame, direction)
 
 
 # ---------------------------------------------------------------------------
@@ -264,7 +235,7 @@ if TTS_SERVICE == "openai":
         voice="ash",  # Voix compatible avec gpt-4o-mini-tts
         sample_rate=24000,
         response_format="wav",
-        stream=False,  # Activer le streaming
+        stream=True,  # Activer le streaming
         instructions="Voix de pirate, énergique et enthousiaste",  # Instructions spécifiques
     )
 
@@ -354,22 +325,25 @@ context_agg = llm.create_context_aggregator(context)
 # Pipeline final
 pipeline = Pipeline(
     [
-        transport.input(),
+    transport.input(),
         stt,
         context_agg.user(),
         llm,
+        
         tts,
         # LipSyncProcessor(),
-        # UtteranceRecorder(),
-        NeuroSyncBufferProcessor(
-            NeuroSyncClient(),
-            NeuroSyncBufferConfig(
-                buffer_ms=NS_BUFFER_MS, extra_delay_ms=NS_EXTRA_DELAY_MS
-            ),
-        ),
+        #UtteranceRecorder(),
+        #NeuroSyncBufferProcessor(
+        #    NeuroSyncClient(),
+        #    NeuroSyncBufferConfig(
+        #        buffer_ms=NS_BUFFER_MS, extra_delay_ms=NS_EXTRA_DELAY_MS
+        #    ),
+        #),
         context_agg.assistant(),
-        transport.output(),
-        buffer,
+        UtteranceRecorder(),
+        #UtteranceRecorder(),
+    transport.output(),
+    buffer,
     ]
 )
 

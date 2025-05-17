@@ -1,0 +1,16 @@
+[submodule "vendor/pipecat"]
+	path = vendor/pipecat
+	url = https://github.com/pipecat-ai/pipecat
+	branch = main
+
+
+[submodule "vendor/NeuroSync_Player"]
+	path = vendor/NeuroSync_Player
+	url = https://github.com/AnimaVR/NeuroSync_Player
+[submodule "vendor/NeuroSync_Local_API"]
+	path = vendor/NeuroSync_Local_API
+	url = https://github.com/AnimaVR/NeuroSync_Local_API
+[submodule "pipecat"]
+	path = pipecat
+	url = https://github.com/pipecat-ai/pipecat
+	branch = main

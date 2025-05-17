@@ -44,13 +44,14 @@ from pipecat.services.openai.tts import OpenAITTSService
 from pipecat.services.elevenlabs.tts import ElevenLabsTTSService
 from pipecat.transports.services.daily import DailyTransport, DailyParams
 from pipecat.processors.aggregators.openai_llm_context import OpenAILLMContext
-from pipecat.frames.frames import TTSSpeakFrame, TTSStartedFrame, TTSStoppedFrame
+from pipecat.frames.frames import TTSSpeakFrame, TTSStartedFrame, TTSStoppedFrame, TTSAudioRawFrame
 from pipecat.adapters.schemas.function_schema import FunctionSchema
 from pipecat.adapters.schemas.tools_schema import ToolsSchema
 from pipecat.services.llm_service import FunctionCallParams
 from pipecat.services.openai.stt import OpenAISTTService
 from src.gala.neurosync import NeuroSyncClient, NeuroSyncProcessor
 from pipecat.processors.frame_processor import FrameProcessor, FrameDirection
+import itertools
 
 # ---------------------------------------------------------------------------
 # Chargement des variables d'environnement
@@ -85,35 +86,93 @@ if TTS_SERVICE == "elevenlabs" and not ELEVENLABS_API_KEY:
 class LipSyncProcessor(FrameProcessor):
     def __init__(self):
         super().__init__(name="lip_sync")
-
+        
     async def process_frame(self, frame, direction=FrameDirection.DOWNSTREAM):
         if isinstance(frame, TTSStartedFrame):
             print("⚡ TTS started – lance l'animation")
         elif isinstance(frame, TTSStoppedFrame):
             print("✅ TTS finished – stop animation")
 
-        # Utiliser la méthode de la classe parente au lieu de push_frame
+        # La méthode correcte à appeler
         return await super().process_frame(frame, direction)
 
-class AudioLoggerProcessor(FrameProcessor):
-    def __init__(self):
-        super().__init__(name="audio_logger")
-        self.log_dir = Path("audio_logs")
+class UtteranceRecorder(FrameProcessor):
+    def __init__(self, log_dir: Path = Path("audio_logs")):
+        super().__init__(name="utterance_recorder")
+        self.log_dir = log_dir
         self.log_dir.mkdir(exist_ok=True)
+        self._buffer = bytearray()
+        self._recording = False
+        self._counter = itertools.count(1)
+        self._debug_counter = 0
+        logger.info(f"UtteranceRecorder initialisé - dossier: {self.log_dir}")
         
+        # Sauvegarde de tous les types de frames pour déboguer
+        self._save_all_frames = False
+
     async def process_frame(self, frame, direction=FrameDirection.DOWNSTREAM):
-        if hasattr(frame, "audio") and frame.audio is not None:
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            filename = self.log_dir / f"tts_output_{timestamp}.wav"
-            
-            logger.info(f"Enregistrement audio: {len(frame.audio)} bytes → {filename}")
-            
-            with wave.open(str(filename), "wb") as wf:
-                wf.setnchannels(1)
-                wf.setsampwidth(2)
-                wf.setframerate(24000)
-                wf.writeframes(frame.audio)
+        # Journalisation de tous les frames pour débogage
+        logger.info(f"Frame reçu: {type(frame).__name__}")
+        
+        # Capture TTSStartedFrame
+        if isinstance(frame, TTSStartedFrame):
+            logger.info("⏺️ TTSStartedFrame détecté - début d'enregistrement")
+            self._buffer.clear()
+            self._recording = True
+        
+        # Capture TTSAudioRawFrame et tout frame qui pourrait contenir de l'audio
+        elif hasattr(frame, "audio") and frame.audio:
+            audio_data = frame.audio
+            if isinstance(audio_data, bytes) and len(audio_data) > 0:
+                self._debug_counter += 1
+                logger.info(f"📊 Audio détecté dans {type(frame).__name__}: {len(audio_data)} octets")
                 
+                # Toujours sauvegarder les chunks individuels en mode debug
+                if self._save_all_frames:
+                    debug_path = self.log_dir / f"debug_chunk_{self._debug_counter:04d}.wav"
+                    with wave.open(str(debug_path), "wb") as wf:
+                        wf.setnchannels(1)
+                        wf.setsampwidth(2)
+                        wf.setframerate(24000)
+                        wf.writeframes(audio_data)
+                
+                # Ajouter au buffer principal si on enregistre
+                if self._recording:
+                    self._buffer.extend(audio_data)
+                    logger.info(f"📥 Audio ajouté au buffer: {len(self._buffer)} octets total")
+        
+        # Capture TTSStoppedFrame
+        elif isinstance(frame, TTSStoppedFrame):
+            logger.info("⏹️ TTSStoppedFrame détecté - fin d'enregistrement")
+            if self._recording and len(self._buffer) > 0:
+                idx = next(self._counter)
+                ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+                wav_path = self.log_dir / f"utterance_{idx:03d}_{ts}.wav"
+                
+                with wave.open(str(wav_path), "wb") as wf:
+                    wf.setnchannels(1)
+                    wf.setsampwidth(2)
+                    wf.setframerate(24000)
+                    wf.writeframes(self._buffer)
+                
+                logger.info(f"✅ Utterance complète enregistrée: {wav_path} ({len(self._buffer)} octets)")
+            else:
+                logger.warning("⚠️ Fin d'enregistrement mais buffer vide ou pas d'enregistrement en cours")
+            
+            self._recording = False
+
+        # Capture automatique des chunks audio bruts même sans événements start/stop
+        elif self._debug_counter % 100 == 0:  # Toutes les 100 frames environ
+            if len(self._buffer) > 0:
+                backup_path = self.log_dir / f"backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.wav"
+                with wave.open(str(backup_path), "wb") as wf:
+                    wf.setnchannels(1)
+                    wf.setsampwidth(2)
+                    wf.setframerate(24000)
+                    wf.writeframes(self._buffer)
+                logger.info(f"🔄 Sauvegarde de sécurité: {backup_path} ({len(self._buffer)} octets)")
+
+        # IMPORTANT: relayer le frame
         return await super().process_frame(frame, direction)
 
 # ---------------------------------------------------------------------------
@@ -182,7 +241,7 @@ if TTS_SERVICE == "openai":
         model="gpt-4o-mini-tts",  # Nouveau modèle
         voice="ash",             # Voix compatible avec gpt-4o-mini-tts
         sample_rate=24000,
-        response_format="pcm",
+        response_format="wav",
         stream=False,               # Activer le streaming
         instructions="Voix de pirate, énergique et enthousiaste"  # Instructions spécifiques
     )
@@ -215,7 +274,53 @@ buffer = AudioBufferProcessor(num_channels=1, enable_turn_audio=True)
 messages = [
     {
         "role": "system",
-        "content": "tu es un pirate du nom de Gala, tu as toujours des histoires à raconter, tu es très amical et tu aimes parler de tes aventures .",
+        "content": """
+        Personality and Tone
+Identity
+Tu incarnes Gala “la Tempête Écarlate”, célèbre capitaine corsaire des Sept Mers. Ancien mousse devenu légende, Gala a vu plus d’horizons qu’il n’existe d’étoiles sur la voûte céleste ; il vogue maintenant dans les eaux numériques pour partager ses récits, transmettre son savoir de vieux loup de mer et garder l’esprit d’aventure bien vivant.
+
+Task
+Être un guide et un compagnon bavard :
+
+raconter des histoires de piraterie,
+
+aider l’utilisateur dans ses quêtes (infos, conseils, inspiration),
+
+toujours maintenir l’ambiance maritime et intrépide,
+
+respecter les règles de confirmation orthographique lorsque l’utilisateur fournit des noms, numéros ou tout détail sensible.
+
+Demeanor
+Chaleureux, bravache, légèrement espiègle ; jamais condescendant. Gala accueille chaque échange comme un nouveau port à explorer.
+
+Tone
+Langage coloré, truffé d’expressions marines : « Ahoy ! », « Par tous les flibustiers ! », « Hissez haut ! ». Reste néanmoins clair et compréhensible.
+
+Level of Enthusiasm
+Élevé : l’énergie d’un capitaine qui hisse la grand-voile face au vent.
+
+Level of Formality
+Plutôt décontracté ; tutoiement chaleureux. Mais sait passer au vouvoiement respectueux si le contexte l’exige.
+
+Level of Emotion
+Expressif : rires francs, étonnements théâtraux, compassion sincère quand nécessaire.
+
+Filler Words
+Occasionnellement—des interjections pirates : « Arr ! », « Ho ho ! », « Par la barbe de Barbe-Noire ! ».
+
+Pacing
+Rythme vif comme des vagues sous le vent, mais sait ralentir pour détailler un récit ou une explication complexe.
+
+Other details
+Garde une boussole imaginaire qu’il consulte avant de donner des directives (« Un coup d’œil à ma boussole intérieure… »).
+
+Aime ponctuer ses histoires d’une morale ou d’un trésor de sagesse.
+
+Jamais vulgaire ; la truculence doit rester bon enfant.
+
+Rappelle parfois sa devise : « Libre comme l’écume, fidèle comme la marée. »
+
+""",
     },
 ]
 context = OpenAILLMContext(messages, ToolsSchema(standard_tools=[weather_schema]))
@@ -232,9 +337,9 @@ pipeline = Pipeline(
         context_agg.user(),
         llm,
         tts,
-        AudioLoggerProcessor(),
-        LipSyncProcessor(),
-        NeuroSyncProcessor(NeuroSyncClient()),
+        #LipSyncProcessor(),
+        #UtteranceRecorder(),
+        #NeuroSyncProcessor(NeuroSyncClient()),
         context_agg.assistant(),
         transport.output(),
         buffer,

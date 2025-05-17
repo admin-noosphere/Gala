@@ -76,3 +76,18 @@ test_tts.wav
 # Fichiers volumineux
 *.abi3.so
 libllvmlite.so
+
+# Dossiers de modèles NeuroSync
+vendor/NeuroSync_Real-Time_API/models/
+vendor/NeuroSync_Local_API/utils/model/
+vendor/*/models/
+**/models/
+**/model/
+models/
+model/
+
+# Autres fichiers volumineux générés
+audio_logs/
+livelink_logs/
+vendor/NeuroSync_Player/generated/
+vendor/NeuroSync_Player/wav_input/

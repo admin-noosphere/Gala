@@ -10,20 +10,23 @@ from __future__ import annotations
 import asyncio
 import io
 import wave
-from typing import Any, Dict, List, Optional, Union, AsyncGenerator
+from typing import Any, Dict, List, Optional, AsyncGenerator
 
 from openai import AsyncOpenAI
 from pipecat.pipeline.pipeline import Frame
 from pipecat.services.tts_service import TTSService
-from pipecat.services.openai.tts import OpenAITTSService
+
 
 # Définition d'une classe AudioSegment simple pour remplacer celle de pipecat.audio.segmenter
 class AudioSegment:
-    def __init__(self, audio: bytes, sample_rate: int, channels: int, is_end: bool = True):
+    def __init__(
+        self, audio: bytes, sample_rate: int, channels: int, is_end: bool = True
+    ):
         self.audio = audio
         self.sample_rate = sample_rate
         self.channels = channels
         self.is_end = is_end
+
 
 class OpenAITTSService(TTSService):
     """Service TTS utilisant l'API OpenAI."""
@@ -47,7 +50,7 @@ class OpenAITTSService(TTSService):
             speech_params: Paramètres supplémentaires pour l'API
         """
         TTSService.__init__(self)
-        
+
         self._api_key = api_key
         self._model = model
         self._voice = voice
@@ -86,15 +89,17 @@ class OpenAITTSService(TTSService):
         try:
             # Appel à l'API OpenAI avec streaming
             audio_bytes = bytearray()
-            
-            async with self._client.audio.speech.with_streaming_response.create(**params) as response:
+
+            async with self._client.audio.speech.with_streaming_response.create(
+                **params
+            ) as response:
                 async for chunk in response.iter_bytes():
                     audio_bytes.extend(chunk)
-            
+
             # Format PCM est déjà 24000 Hz, 16-bit, mono
             sample_rate = 24000
             channels = 1
-            
+
             # Créer un segment audio
             return AudioSegment(
                 audio=bytes(audio_bytes),
@@ -102,7 +107,7 @@ class OpenAITTSService(TTSService):
                 channels=channels,
                 is_end=True,
             )
-            
+
         except Exception as e:
             self.logger.error(f"Erreur lors de la synthèse vocale OpenAI: {e}")
             return None
@@ -111,16 +116,16 @@ class OpenAITTSService(TTSService):
         """
         Méthode abstraite requise par TTSService.
         Convertit du texte en parole et renvoie des frames audio.
-        
+
         Args:
             text: Texte à convertir en parole
-            
+
         Yields:
             Frames audio
         """
         if not text.strip():
             return
-            
+
         segment = await self.tts(text)
         if segment:
             yield Frame(
@@ -133,10 +138,10 @@ class OpenAITTSService(TTSService):
     async def process_frame(self, frame: Frame, direction) -> List[Frame]:
         """Convertit le texte de la frame en audio."""
         # Vérifier si c'est une StartFrame ou un autre type de frame spécial
-        if not hasattr(frame, 'text'):
+        if not hasattr(frame, "text"):
             # Simplement passer la frame telle quelle
             return [frame]
-        
+
         if not frame.text:
             return [frame]
 
@@ -144,12 +149,14 @@ class OpenAITTSService(TTSService):
         if not segment:
             return [frame]
 
-        return [Frame(
-            source=self.name,
-            text=frame.text,
-            audio=segment,
-            meta=frame.meta,
-        )]
+        return [
+            Frame(
+                source=self.name,
+                text=frame.text,
+                audio=segment,
+                meta=frame.meta,
+            )
+        ]
 
 
 def pcm_to_wav_bytes(pcm: bytes, sr: int, channels: int = 1) -> bytes:
@@ -167,31 +174,33 @@ def pcm_to_wav_bytes(pcm: bytes, sr: int, channels: int = 1) -> bytes:
 if __name__ == "__main__":
     import os
     from dotenv import load_dotenv
-    
+
     async def test_tts():
         load_dotenv()
         api_key = os.getenv("OPENAI_API_KEY")
         if not api_key:
             print("OPENAI_API_KEY non définie dans les variables d'environnement")
             return
-            
+
         tts = OpenAITTSService(
             api_key=api_key,
             model="gpt-4o-mini-tts",
             voice="nova",
-            instructions="Ton: Naturel et bienveillant. Émotion: Engagement et attention."
+            instructions="Ton: Naturel et bienveillant. Émotion: Engagement et attention.",
         )
-        
+
         text = "Bonjour, je suis un assistant virtuel. Comment puis-je vous aider aujourd'hui?"
         segment = await tts.tts(text)
-        
+
         if segment:
             # Enregistrer en WAV pour test
-            wav_data = pcm_to_wav_bytes(segment.audio, segment.sample_rate, segment.channels)
+            wav_data = pcm_to_wav_bytes(
+                segment.audio, segment.sample_rate, segment.channels
+            )
             with open("test_tts.wav", "wb") as f:
                 f.write(wav_data)
-            print(f"Fichier test_tts.wav créé avec succès.")
+            print("Fichier test_tts.wav créé avec succès.")
         else:
             print("Échec de la synthèse vocale.")
-    
-    asyncio.run(test_tts()) 
+
+    asyncio.run(test_tts())

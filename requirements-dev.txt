@@ -1,0 +1,7 @@
+# Inclut les dépendances principales
+-r requirements.txt
+
+# Outils de développement
+black>=24.3.0
+ruff>=0.4.0
+pytest>=8.0.0

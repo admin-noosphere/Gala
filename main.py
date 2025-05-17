@@ -27,6 +27,7 @@ from pathlib import Path
 import sys
 import wave
 from datetime import datetime
+
 sys.path.append(str(Path(__file__).resolve().parent / "src"))
 
 from dotenv import load_dotenv
@@ -44,12 +45,13 @@ from pipecat.services.openai.tts import OpenAITTSService
 from pipecat.services.elevenlabs.tts import ElevenLabsTTSService
 from pipecat.transports.services.daily import DailyTransport, DailyParams
 from pipecat.processors.aggregators.openai_llm_context import OpenAILLMContext
-from pipecat.frames.frames import TTSSpeakFrame, TTSStartedFrame, TTSStoppedFrame, TTSAudioRawFrame
+from pipecat.frames.frames import TTSSpeakFrame, TTSStartedFrame, TTSStoppedFrame
 from pipecat.adapters.schemas.function_schema import FunctionSchema
 from pipecat.adapters.schemas.tools_schema import ToolsSchema
 from pipecat.services.llm_service import FunctionCallParams
 from pipecat.services.openai.stt import OpenAISTTService
-from src.gala.neurosync import NeuroSyncClient, NeuroSyncProcessor
+from src.gala.neurosync import NeuroSyncClient
+from src.gala.neurosync_buffer import NeuroSyncBufferProcessor, NeuroSyncBufferConfig
 from pipecat.processors.frame_processor import FrameProcessor, FrameDirection
 import itertools
 
@@ -70,6 +72,8 @@ DAILY_ROOM_URL = os.getenv("DAILY_ROOM_URL")
 DAILY_API_TOKEN = os.getenv("DAILY_API_TOKEN")
 BOT_NAME = os.getenv("BOT_NAME", "Gala")
 TTS_SERVICE = os.getenv("TTS_SERVICE", "openai").lower()
+NS_BUFFER_MS = int(os.getenv("NS_BUFFER_MS", "100"))
+NS_EXTRA_DELAY_MS = int(os.getenv("NS_EXTRA_DELAY_MS", "50"))
 
 REQUIRED = {
     "DEEPGRAM_API_KEY": DEEPGRAM_API_KEY,
@@ -83,10 +87,11 @@ for name, val in REQUIRED.items():
 if TTS_SERVICE == "elevenlabs" and not ELEVENLABS_API_KEY:
     raise SystemExit("[Gala] ELEVENLABS_API_KEY requis si TTS_SERVICE=elevenlabs")
 
+
 class LipSyncProcessor(FrameProcessor):
     def __init__(self):
         super().__init__(name="lip_sync")
-        
+
     async def process_frame(self, frame, direction=FrameDirection.DOWNSTREAM):
         if isinstance(frame, TTSStartedFrame):
             print("⚡ TTS started – lance l'animation")
@@ -95,6 +100,7 @@ class LipSyncProcessor(FrameProcessor):
 
         # La méthode correcte à appeler
         return await super().process_frame(frame, direction)
+
 
 class UtteranceRecorder(FrameProcessor):
     def __init__(self, log_dir: Path = Path("audio_logs")):
@@ -106,41 +112,47 @@ class UtteranceRecorder(FrameProcessor):
         self._counter = itertools.count(1)
         self._debug_counter = 0
         logger.info(f"UtteranceRecorder initialisé - dossier: {self.log_dir}")
-        
+
         # Sauvegarde de tous les types de frames pour déboguer
         self._save_all_frames = False
 
     async def process_frame(self, frame, direction=FrameDirection.DOWNSTREAM):
         # Journalisation de tous les frames pour débogage
         logger.info(f"Frame reçu: {type(frame).__name__}")
-        
+
         # Capture TTSStartedFrame
         if isinstance(frame, TTSStartedFrame):
             logger.info("⏺️ TTSStartedFrame détecté - début d'enregistrement")
             self._buffer.clear()
             self._recording = True
-        
+
         # Capture TTSAudioRawFrame et tout frame qui pourrait contenir de l'audio
         elif hasattr(frame, "audio") and frame.audio:
             audio_data = frame.audio
             if isinstance(audio_data, bytes) and len(audio_data) > 0:
                 self._debug_counter += 1
-                logger.info(f"📊 Audio détecté dans {type(frame).__name__}: {len(audio_data)} octets")
-                
+                logger.info(
+                    f"📊 Audio détecté dans {type(frame).__name__}: {len(audio_data)} octets"
+                )
+
                 # Toujours sauvegarder les chunks individuels en mode debug
                 if self._save_all_frames:
-                    debug_path = self.log_dir / f"debug_chunk_{self._debug_counter:04d}.wav"
+                    debug_path = (
+                        self.log_dir / f"debug_chunk_{self._debug_counter:04d}.wav"
+                    )
                     with wave.open(str(debug_path), "wb") as wf:
                         wf.setnchannels(1)
                         wf.setsampwidth(2)
                         wf.setframerate(24000)
                         wf.writeframes(audio_data)
-                
+
                 # Ajouter au buffer principal si on enregistre
                 if self._recording:
                     self._buffer.extend(audio_data)
-                    logger.info(f"📥 Audio ajouté au buffer: {len(self._buffer)} octets total")
-        
+                    logger.info(
+                        f"📥 Audio ajouté au buffer: {len(self._buffer)} octets total"
+                    )
+
         # Capture TTSStoppedFrame
         elif isinstance(frame, TTSStoppedFrame):
             logger.info("⏹️ TTSStoppedFrame détecté - fin d'enregistrement")
@@ -148,32 +160,42 @@ class UtteranceRecorder(FrameProcessor):
                 idx = next(self._counter)
                 ts = datetime.now().strftime("%Y%m%d_%H%M%S")
                 wav_path = self.log_dir / f"utterance_{idx:03d}_{ts}.wav"
-                
+
                 with wave.open(str(wav_path), "wb") as wf:
                     wf.setnchannels(1)
                     wf.setsampwidth(2)
                     wf.setframerate(24000)
                     wf.writeframes(self._buffer)
-                
-                logger.info(f"✅ Utterance complète enregistrée: {wav_path} ({len(self._buffer)} octets)")
+
+                logger.info(
+                    f"✅ Utterance complète enregistrée: {wav_path} ({len(self._buffer)} octets)"
+                )
             else:
-                logger.warning("⚠️ Fin d'enregistrement mais buffer vide ou pas d'enregistrement en cours")
-            
+                logger.warning(
+                    "⚠️ Fin d'enregistrement mais buffer vide ou pas d'enregistrement en cours"
+                )
+
             self._recording = False
 
         # Capture automatique des chunks audio bruts même sans événements start/stop
         elif self._debug_counter % 100 == 0:  # Toutes les 100 frames environ
             if len(self._buffer) > 0:
-                backup_path = self.log_dir / f"backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.wav"
+                backup_path = (
+                    self.log_dir
+                    / f"backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.wav"
+                )
                 with wave.open(str(backup_path), "wb") as wf:
                     wf.setnchannels(1)
                     wf.setsampwidth(2)
                     wf.setframerate(24000)
                     wf.writeframes(self._buffer)
-                logger.info(f"🔄 Sauvegarde de sécurité: {backup_path} ({len(self._buffer)} octets)")
+                logger.info(
+                    f"🔄 Sauvegarde de sécurité: {backup_path} ({len(self._buffer)} octets)"
+                )
 
         # IMPORTANT: relayer le frame
         return await super().process_frame(frame, direction)
+
 
 # ---------------------------------------------------------------------------
 # Définition d'une fonction « get_current_weather » (exemple function-calling)
@@ -239,11 +261,11 @@ if TTS_SERVICE == "openai":
     tts = OpenAITTSService(
         api_key=OPENAI_API_KEY,
         model="gpt-4o-mini-tts",  # Nouveau modèle
-        voice="ash",             # Voix compatible avec gpt-4o-mini-tts
+        voice="ash",  # Voix compatible avec gpt-4o-mini-tts
         sample_rate=24000,
         response_format="wav",
-        stream=False,               # Activer le streaming
-        instructions="Voix de pirate, énergique et enthousiaste"  # Instructions spécifiques
+        stream=False,  # Activer le streaming
+        instructions="Voix de pirate, énergique et enthousiaste",  # Instructions spécifiques
     )
 
 
@@ -258,7 +280,7 @@ transport = DailyTransport(
         audio_in_enabled=True,
         audio_out_enabled=True,
         audio_out_sample_rate=24000,
-        audio_out_buffer_size=1024*1024,  # Buffer plus grand
+        audio_out_buffer_size=1024 * 1024,  # Buffer plus grand
         vad_analyzer=SileroVADAnalyzer(
             params=VADParams(confidence=0.6, start_secs=0.1, stop_secs=0.7)
         ),
@@ -337,9 +359,14 @@ pipeline = Pipeline(
         context_agg.user(),
         llm,
         tts,
-        #LipSyncProcessor(),
-        #UtteranceRecorder(),
-        #NeuroSyncProcessor(NeuroSyncClient()),
+        # LipSyncProcessor(),
+        # UtteranceRecorder(),
+        NeuroSyncBufferProcessor(
+            NeuroSyncClient(),
+            NeuroSyncBufferConfig(
+                buffer_ms=NS_BUFFER_MS, extra_delay_ms=NS_EXTRA_DELAY_MS
+            ),
+        ),
         context_agg.assistant(),
         transport.output(),
         buffer,
@@ -365,12 +392,12 @@ async def on_client_connected(transport, client):
     # Juste saluer tout nouveau client
     client_id = client.get("id", "inconnu")
     logger.info("Client connecté : %s", client_id)
-    
+
     greeting = "Je suis Gala, le pirate le plus redoutable des 7 mers."
-    
+
     assistant_ctx = context_agg.assistant()
     assistant_ctx.add_messages([{"role": "assistant", "content": greeting}])
-    
+
     await task.queue_frames([TTSSpeakFrame(greeting)])
 
 
@@ -394,5 +421,3 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         logger.info("Arrêt par l'utilisateur")
-
-

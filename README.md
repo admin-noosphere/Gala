@@ -37,6 +37,14 @@ Ce module fournit une intégration du service de synthèse vocale (TTS) d'OpenAI
 
 ## Scripts d'exemple
 
+Pour vérifier la communication LiveLink, lancez simplement:
+
+```bash
+python example/livelink_test.py
+```
+
+Le script envoie un frame de blendshapes neutres vers `LIVELINK_IP:LIVELINK_PORT`.
+
 
 ## Monitoring externe
 
@@ -50,4 +58,4 @@ Cette page pourrait afficher en temps réel :
 - Les réponses générées par l'LLM
 - Les statistiques d'usage (tokens et durée de parole)
 
-Le serveur Python peut exposer ces informations via WebSocket ou SSE afin d'alimenter la page Next.js.
+Le serveur Python peut exposer ces informations via WebSocket ou SSE afin d'alimenter la page Next.js

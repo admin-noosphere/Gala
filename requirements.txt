@@ -8,4 +8,5 @@ openai>=1.12.0  # Pour OpenAI TTS
 # pip install -e ./vendor/pipecat[webrtc,daily,deepgram,elevenlabs,openai,silero]
 
 # Dépendances de développement
-# Installer avec: pip install -r requirements-dev.txtgoogle-genai>=1.15.0
+# Installer avec: pip install -r requirements-dev.txt
+google-genai>=1.15.0

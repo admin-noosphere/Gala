@@ -25,6 +25,8 @@ import asyncio
 import os
 from pathlib import Path
 import sys
+import wave
+from datetime import datetime
 sys.path.append(str(Path(__file__).resolve().parent / "src"))
 
 from dotenv import load_dotenv
@@ -91,6 +93,27 @@ class LipSyncProcessor(FrameProcessor):
             print("✅ TTS finished – stop animation")
 
         # Utiliser la méthode de la classe parente au lieu de push_frame
+        return await super().process_frame(frame, direction)
+
+class AudioLoggerProcessor(FrameProcessor):
+    def __init__(self):
+        super().__init__(name="audio_logger")
+        self.log_dir = Path("audio_logs")
+        self.log_dir.mkdir(exist_ok=True)
+        
+    async def process_frame(self, frame, direction=FrameDirection.DOWNSTREAM):
+        if hasattr(frame, "audio") and frame.audio is not None:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = self.log_dir / f"tts_output_{timestamp}.wav"
+            
+            logger.info(f"Enregistrement audio: {len(frame.audio)} bytes → {filename}")
+            
+            with wave.open(str(filename), "wb") as wf:
+                wf.setnchannels(1)
+                wf.setsampwidth(2)
+                wf.setframerate(24000)
+                wf.writeframes(frame.audio)
+                
         return await super().process_frame(frame, direction)
 
 # ---------------------------------------------------------------------------
@@ -176,6 +199,7 @@ transport = DailyTransport(
         audio_in_enabled=True,
         audio_out_enabled=True,
         audio_out_sample_rate=24000,
+        audio_out_buffer_size=1024*1024,  # Buffer plus grand
         vad_analyzer=SileroVADAnalyzer(
             params=VADParams(confidence=0.6, start_secs=0.1, stop_secs=0.7)
         ),
@@ -208,6 +232,7 @@ pipeline = Pipeline(
         context_agg.user(),
         llm,
         tts,
+        AudioLoggerProcessor(),
         LipSyncProcessor(),
         NeuroSyncProcessor(NeuroSyncClient()),
         context_agg.assistant(),

@@ -32,29 +32,21 @@ Ce module fournit une intégration du service de synthèse vocale (TTS) d'OpenAI
    TTS_SERVICE=openai
    ```
 
-## Utilisation
 
-### Dans le pipeline Pipecat
-
-Le service est automatiquement configuré dans `main.py` si `TTS_SERVICE=openai` est défini.
-
-### Utilisation manuelle
-
-```python
-from src.voice.openai_fm import OpenAITTSService
-
-# Initialiser le service
-tts = OpenAITTSService(
-    api_key="votre_clé_api_openai",
-    model="gpt-4o-mini-tts",  # ou "tts-1"
-    voice="nova",             # alloy, echo, fable, onyx, nova, shimmer
-    instructions="Ton: Naturel et bienveillant. Émotion: Engagement et attention."
-)
-
-# Utiliser le service
-async def example():
-    segment = await tts.tts("Bonjour, comment puis-je vous aider aujourd'hui?")
-    # segment contient les données audio PCM
-```
 
 ## Scripts d'exemple
+
+
+## Monitoring externe
+
+Pour observer l'activité de Gala il est possible de développer un petit tableau de bord Web.
+Une approche simple consiste à créer une application [Next.js](https://nextjs.org/) utilisant la librairie de composants [shadcn/ui](https://ui.shadcn.com/).
+
+Cette page pourrait afficher en temps réel :
+
+- L'état de connexion à la room Daily
+- Les transcriptions reçues par Deepgram
+- Les réponses générées par l'LLM
+- Les statistiques d'usage (tokens et durée de parole)
+
+Le serveur Python peut exposer ces informations via WebSocket ou SSE afin d'alimenter la page Next.js.

@@ -54,6 +54,8 @@ from src.gala.neurosync import NeuroSyncClient
 from src.gala.neurosync_buffer import NeuroSyncBufferProcessor, NeuroSyncBufferConfig
 from pipecat.processors.frame_processor import FrameProcessor, FrameDirection
 import itertools
+from src.gala.livelink import LiveLinkDataTrack
+from src.gala.neurosync_buffer import VisemeFrame, BlendshapeFrame
 
 # ---------------------------------------------------------------------------
 # Chargement des variables d'environnement
@@ -72,6 +74,8 @@ DAILY_ROOM_URL = os.getenv("DAILY_ROOM_URL")
 DAILY_API_TOKEN = os.getenv("DAILY_API_TOKEN")
 BOT_NAME = os.getenv("BOT_NAME", "Gala")
 TTS_SERVICE = os.getenv("TTS_SERVICE", "openai").lower()
+NS_HOST = os.getenv("NS_HOST", "127.0.0.1")
+NS_PORT = int(os.getenv("NS_PORT", "6969"))
 NS_BUFFER_MS = int(os.getenv("NS_BUFFER_MS", "100"))
 NS_EXTRA_DELAY_MS = int(os.getenv("NS_EXTRA_DELAY_MS", "50"))
 
@@ -122,7 +126,7 @@ class UtteranceRecorder(FrameProcessor):
         
         # --- (1) Traitement et enregistrement ---
         # Ne logge que les frames importants, pas les frames audio bruts
-        if not isinstance(frame, TTSAudioRawFrame):
+        if not isinstance(frame, TTSAudioRawFrame) and not isinstance(frame, VisemeFrame) and not isinstance(frame, BlendshapeFrame):
             logger.info(f"Frame reçu: {type(frame).__name__}")
 
         # Capture TTSStartedFrame
@@ -322,26 +326,34 @@ context_agg = llm.create_context_aggregator(context)
 # ---------------------------------------------------------------------------
 # Pipeline
 # ---------------------------------------------------------------------------
-# Pipeline final
+# Initialiser les services NeuroSync
+neurosync_client = NeuroSyncClient(
+    host=NS_HOST,
+    port=NS_PORT
+)
+
+neurosync_proc = NeuroSyncBufferProcessor(
+    neurosync_client,
+    NeuroSyncBufferConfig(
+        min_frames=9,
+        sample_rate=16000,
+        bytes_per_frame=470,
+        debug_save=True
+    )
+)
+
+# Modification du pipeline pour ajouter NeuroSync et LiveLink
 pipeline = Pipeline(
     [
     transport.input(),
         stt,
         context_agg.user(),
         llm,
-        
-        tts,
-        # LipSyncProcessor(),
-        #UtteranceRecorder(),
-        #NeuroSyncBufferProcessor(
-        #    NeuroSyncClient(),
-        #    NeuroSyncBufferConfig(
-        #        buffer_ms=NS_BUFFER_MS, extra_delay_ms=NS_EXTRA_DELAY_MS
-        #    ),
-        #),
+        tts,  # Génère les chunks audio
+        #neurosync_proc,  # Envoie l'audio à NeuroSync et reçoit les visèmes
+        LiveLinkDataTrack(transport, use_udp=True, udp_ip="192.168.1.32"),
         context_agg.assistant(),
         UtteranceRecorder(),
-        #UtteranceRecorder(),
     transport.output(),
     buffer,
     ]

@@ -19,6 +19,7 @@ Ce module fournit une intégration du service de synthèse vocale (TTS) d'OpenAI
 - Choix de différentes voix (alloy, echo, fable, onyx, nova, shimmer, etc.)
 - Instructions de style pour personnaliser la voix
 - Streaming audio pour une réponse rapide
+- Envoi automatique de l'audio vers NeuroSync pour la synchronisation labiale
 
 ## Configuration
 

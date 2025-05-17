@@ -24,6 +24,8 @@ from __future__ import annotations
 import asyncio
 import os
 from pathlib import Path
+import sys
+sys.path.append(str(Path(__file__).resolve().parent / "src"))
 
 from dotenv import load_dotenv
 from loguru import logger
@@ -40,12 +42,13 @@ from pipecat.services.openai.tts import OpenAITTSService
 from pipecat.services.elevenlabs.tts import ElevenLabsTTSService
 from pipecat.transports.services.daily import DailyTransport, DailyParams
 from pipecat.processors.aggregators.openai_llm_context import OpenAILLMContext
-from pipecat.frames.frames import TTSSpeakFrame
+from pipecat.frames.frames import TTSSpeakFrame, TTSStartedFrame, TTSStoppedFrame
 from pipecat.adapters.schemas.function_schema import FunctionSchema
 from pipecat.adapters.schemas.tools_schema import ToolsSchema
 from pipecat.services.llm_service import FunctionCallParams
 from pipecat.services.openai.stt import OpenAISTTService
-from gala.neurosync import NeuroSyncClient, NeuroSyncProcessor
+from src.gala.neurosync import NeuroSyncClient, NeuroSyncProcessor
+from pipecat.processors.frame_processor import FrameProcessor, FrameDirection
 
 # ---------------------------------------------------------------------------
 # Chargement des variables d'environnement
@@ -77,6 +80,18 @@ for name, val in REQUIRED.items():
 if TTS_SERVICE == "elevenlabs" and not ELEVENLABS_API_KEY:
     raise SystemExit("[Gala] ELEVENLABS_API_KEY requis si TTS_SERVICE=elevenlabs")
 
+class LipSyncProcessor(FrameProcessor):
+    def __init__(self):
+        super().__init__(name="lip_sync")
+
+    async def process_frame(self, frame, direction=FrameDirection.DOWNSTREAM):
+        if isinstance(frame, TTSStartedFrame):
+            print("⚡ TTS started – lance l'animation")
+        elif isinstance(frame, TTSStoppedFrame):
+            print("✅ TTS finished – stop animation")
+
+        # Utiliser la méthode de la classe parente au lieu de push_frame
+        return await super().process_frame(frame, direction)
 
 # ---------------------------------------------------------------------------
 # Définition d'une fonction « get_current_weather » (exemple function-calling)
@@ -144,7 +159,7 @@ if TTS_SERVICE == "openai":
         model="tts-1",  # ou "tts-1-hd"
         voice="nova",
         sample_rate=24000,
-        response_format="wav",  # utile pour l’inspection
+        response_format="wav",  # utile pour l'inspection
         stream=False,  # force la réponse en une seule partie
     )
 
@@ -191,9 +206,10 @@ pipeline = Pipeline(
         stt,
         context_agg.user(),
         llm,
-        tts,  # 1. synthèse
-        NeuroSyncProcessor(NeuroSyncClient()),  # envoi audio vers NeuroSync
-        context_agg.assistant(),  # 2. archivage de la réponse
+        tts,
+        LipSyncProcessor(),
+        NeuroSyncProcessor(NeuroSyncClient()),
+        context_agg.assistant(),
         transport.output(),
         buffer,
     ]
@@ -214,39 +230,23 @@ task = PipelineTask(
 # ---------------------------------------------------------------------------
 @transport.event_handler("on_client_connected")
 async def on_client_connected(transport, client):
-    if client.get("id") != transport.bot_id:
-        logger.info("Client connecté : %s", client.get("id"))
-
-        greeting = "Je suis Gala, le pirate le plus redoutable des 7 mers."
-
-        assistant_ctx = context_agg.assistant()
-        assistant_ctx.add_messages([{"role": "assistant", "content": greeting}])
-
-        # On fait parler Gala mais on n'appelle pas Gemini tout de suite → pas de risque d'erreur 400
-        await task.queue_frames(
-            [
-                TTSSpeakFrame(greeting),
-            ]
-        )
+    # Ne pas essayer de filtrer si c'est le bot ou non
+    # Juste saluer tout nouveau client
+    client_id = client.get("id", "inconnu")
+    logger.info("Client connecté : %s", client_id)
+    
+    greeting = "Je suis Gala, le pirate le plus redoutable des 7 mers."
+    
+    assistant_ctx = context_agg.assistant()
+    assistant_ctx.add_messages([{"role": "assistant", "content": greeting}])
+    
+    await task.queue_frames([TTSSpeakFrame(greeting)])
 
 
 @transport.event_handler("on_client_disconnected")
 async def on_client_disconnected(transport, client):
     logger.info("Client déconnecté : %s", client.get("id"))
     await task.cancel()
-
-
-# ─── callbacks synchro labiale ───────────────────────────────────
-# Ces callbacks déclenchent simplement le début et la fin de l'animation faciale
-# pendant que le processor ``NeuroSyncProcessor`` envoie l'audio en continu.
-@tts.event_handler("on_tts_started")
-async def _(*_):
-    print("⚡ TTS started – lance l’animation")
-
-
-@tts.event_handler("on_tts_finished")
-async def _(*_):
-    print("✅ TTS finished – stop animation")
 
 
 # ---------------------------------------------------------------------------
@@ -263,3 +263,5 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         logger.info("Arrêt par l'utilisateur")
+
+

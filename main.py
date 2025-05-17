@@ -156,11 +156,12 @@ if TTS_SERVICE == "elevenlabs":
 if TTS_SERVICE == "openai":
     tts = OpenAITTSService(
         api_key=OPENAI_API_KEY,
-        model="tts-1",  # ou "tts-1-hd"
-        voice="nova",
+        model="gpt-4o-mini-tts",  # Nouveau modèle
+        voice="ash",             # Voix compatible avec gpt-4o-mini-tts
         sample_rate=24000,
-        response_format="wav",  # utile pour l'inspection
-        stream=False,  # force la réponse en une seule partie
+        response_format="pcm",
+        stream=False,               # Activer le streaming
+        instructions="Voix de pirate, énergique et enthousiaste"  # Instructions spécifiques
     )
 
 

@@ -61,4 +61,4 @@ class NeuroSyncBufferProcessor(FrameProcessor):
                 getattr(audio, "channels", 1) if audio else 1,
             )
 
-        await self.push_frame(frame, direction)
+        return await super().process_frame(frame, direction)

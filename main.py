@@ -27,6 +27,58 @@ from pathlib import Path
 import sys
 import wave
 from datetime import datetime
+import logging
+
+# Configuration du logger global pour capturer toute la sortie console
+log_dir = Path("logs")
+log_dir.mkdir(exist_ok=True)
+log_file = log_dir / f"gala_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+
+# Configurer le logger
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s | %(levelname)s | %(message)s',
+    handlers=[
+        logging.FileHandler(log_file),
+        logging.StreamHandler()  # Garde aussi l'affichage sur la console
+    ]
+)
+
+# Classe pour rediriger stdout et stderr vers le logger
+class LoggerWriter:
+    def __init__(self, level):
+        self.level = level
+        self.buffer = []
+
+    def write(self, message):
+        if message.strip():  # Ignorer les lignes vides
+            # Accumuler dans le tampon jusqu'à une nouvelle ligne
+            if '\n' in message:
+                parts = message.split('\n')
+                # Traiter les parties complètes
+                for part in parts[:-1]:
+                    if self.buffer:
+                        self.buffer.append(part)
+                        logging.log(self.level, ''.join(self.buffer))
+                        self.buffer.clear()
+                    elif part:
+                        logging.log(self.level, part)
+                # Stocker la dernière partie si non vide
+                if parts[-1]:
+                    self.buffer.append(parts[-1])
+            else:
+                self.buffer.append(message)
+    
+    def flush(self):
+        if self.buffer:
+            logging.log(self.level, ''.join(self.buffer))
+            self.buffer.clear()
+
+# Rediriger stdout et stderr vers notre logger
+sys.stdout = LoggerWriter(logging.INFO)
+sys.stderr = LoggerWriter(logging.ERROR)
+
+logging.info("=== Démarrage de Gala ===")
 
 sys.path.append(str(Path(__file__).resolve().parent / "src"))
 
@@ -332,9 +384,14 @@ neurosync_client = NeuroSyncClient(
     port=NS_PORT
 )
 
+# Initialiser LiveLink
+livelink_processor = LiveLinkDataTrack(transport, use_udp=True, udp_ip="192.168.1.14")
+
+# Initialiser NeuroSync avec une référence à LiveLink
 neurosync_proc = NeuroSyncBufferProcessor(
     neurosync_client,
-    NeuroSyncBufferConfig(
+    livelink_processor=livelink_processor,
+    config=NeuroSyncBufferConfig(
         min_frames=9,
         sample_rate=16000,
         bytes_per_frame=470,
@@ -342,20 +399,20 @@ neurosync_proc = NeuroSyncBufferProcessor(
     )
 )
 
-# Modification du pipeline pour ajouter NeuroSync et LiveLink
+# Pipeline - Retirer LiveLinkDataTrack de la chaîne principale
 pipeline = Pipeline(
     [
-    transport.input(),
+        transport.input(),
         stt,
         context_agg.user(),
         llm,
-        tts,  # Génère les chunks audio
-        #neurosync_proc,  # Envoie l'audio à NeuroSync et reçoit les visèmes
-        LiveLinkDataTrack(transport, use_udp=True, udp_ip="192.168.1.32"),
+        tts,
+        neurosync_proc, # Should be active to process TTS audio and produce blendshapes
+        #LiveLinkDataTrack(transport, use_udp=True, udp_ip="192.168.1.32"), # Consumes frames from neurosync_proc
         context_agg.assistant(),
         UtteranceRecorder(),
-    transport.output(),
-    buffer,
+        transport.output(),
+        buffer,
     ]
 )
 

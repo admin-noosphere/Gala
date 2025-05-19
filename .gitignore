@@ -92,6 +92,6 @@ livelink_logs/
 vendor/NeuroSync_Player/generated/
 vendor/NeuroSync_Player/wav_input/
 
-.pcm
-.wav
-.mp3
+*.pcm
+*.wav
+*.mp3

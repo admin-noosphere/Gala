@@ -18,6 +18,7 @@ from typing import Callable, List
 import time
 from dataclasses import dataclass
 from pipecat.processors.frame_processor import FrameProcessor, FrameDirection
+import os
 
 
 @dataclass
